@@ -1,5 +1,7 @@
 # MindRift
 
+![MindRift Dragon](MindRiftDragon.png)
+
 ### A Dynamic Stress & Sanity Engine for AI Dungeon
 
 **Every mind has its breaking point.**
