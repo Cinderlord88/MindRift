@@ -1,0 +1,831 @@
+// MINDRIFT v1.0 — LIBRARY (PERSISTENT CHARACTER STATE & PSYCHOLOGY CARDS)
+// Keeps original CHARACTER Story Cards untouched. Maintains at most one
+// PSYCHOLOGY Story Card per character for developed tendencies. The first key
+// is the profile name; remaining keys are copied from the character card.
+// Psychological scores and derangement selections remain in persistent state.
+// Set to true only when troubleshooting character discovery or profile cards.
+// Release mode keeps important profile-card messages and failures visible.
+const MINDRIFT_LIBRARY_VERBOSE = false;
+const psyLog = message => {
+  if (MINDRIFT_LIBRARY_VERBOSE ||
+      /^PSY (?:PROFILE (?:CREATED|UPDATED|REMOVED|.*FAILED|.*UNAVAILABLE)|DERANGEMENT TEXT UNAVAILABLE)/.test(String(message))) {
+    log(message);
+  }
+};
+const PSY = {
+  tag: '[PSY_ENGINE]',
+  // STRESS REACTIONS — one rollable table of 20 temporary responses.
+  // Stress resets to 100 after a reaction. Edit one quoted entry per line.
+  stressReactions: [
+    'freezes briefly, struggling to decide what to do',
+    'withdraws from conversation and becomes unusually quiet',
+    'speaks sharply or snaps at a nearby companion',
+    'paces restlessly and finds it difficult to remain still',
+    'breathes rapidly and struggles to slow their breathing',
+    'experiences trembling hands and difficulty with fine movements',
+    'repeatedly checks exits and possible escape routes',
+    'seeks reassurance and repeatedly asks if things are safe',
+    'becomes irritable and argues over minor decisions',
+    'has trouble concentrating and misses part of a conversation',
+    'hesitates before acting, even when a decision is urgent',
+    'retreats to a quieter or more secluded place',
+    'becomes tearful and has difficulty speaking steadily',
+    'uses nervous humor at an inappropriate moment',
+    'fixates on one manageable task while neglecting other concerns',
+    'becomes unusually controlling and insists on a rigid plan',
+    'startles easily and reacts strongly to sudden noises',
+    'reports nausea, dizziness, or a tight feeling in the chest',
+    'seeks proximity to a trusted companion and avoids being alone',
+    'becomes emotionally numb and responds in a flat, detached manner'
+  ],
+
+  // DERANGEMENTS — one rollable table of 25 persistent psychological effects.
+  derangements: [
+    'Claustrophobia - Fear of enclosed spaces',
+    'Nyctophobia - Fear of darkness',
+    'Acrophobia - Fear of heights',
+    'Thalassophobia - Fear of deep water',
+    'Necrophobia - Fear of corpses and death',
+    'Scopophobia - Fear of being watched',
+    'Automatonophobia - Fear of humanlike figures',
+    'Aichmophobia - Fear of sharp objects',
+    'Entomophobia - Fear of insects',
+    'Astraphobia - Fear of storms',
+
+    'Kleptomania - Compulsion to steal',
+    'Pyromania - Obsession with fire',
+    'Arithmomania - Compulsion to count',
+    'Bibliomania - Obsession with collecting books',
+    'Dipsomania - Compulsive craving for alcohol',
+    'Onomatomania - Obsession with words or phrases',
+    'Monomania - Fixation on a single idea or goal',
+    'Trichotillomania - Compulsion to pull out hair',
+
+    'Persecutory Delusions - Belief that others are conspiring against them',
+    'Auditory Hallucinations - Hearing nonexistent voices or sounds',
+    'Visual Hallucinations - Seeing nonexistent figures or objects',
+    'Depersonalization - Feeling detached from oneself',
+    'Derealization - Perceiving reality as dreamlike or artificial',
+    'Dissociative Amnesia - Unexplained gaps in memory',
+    'Compulsive Ritualism - Repeating rituals to prevent imagined disasters'
+  ],
+
+  // DEVELOPED TENDENCIES — mechanical names remain internal.
+  // These sentences appear only on PSYCHOLOGY Story Cards, never on original
+  // Character cards. They should be narratively meaningful while describing
+  // tendencies, not guaranteed actions or replacements for player agency.
+  derangementProfiles: [
+    { name: 'Claustrophobia', storyCardText: 'Enclosed spaces can provoke rising panic; may urgently seek an exit even when staying put would be safer.' },
+    { name: 'Nyctophobia', storyCardText: 'Complete darkness can provoke intense fear; may cling to sources of light or resist entering unlit places.' },
+    { name: 'Acrophobia', storyCardText: 'Great heights can trigger vertigo and panic; may freeze or retreat near exposed drops.' },
+    { name: 'Thalassophobia', storyCardText: 'Deep or opaque water inspires dread; may refuse to enter it or panic when trapped above it.' },
+    { name: 'Necrophobia', storyCardText: 'Corpses and signs of death provoke intense dread; may recoil, retreat, or struggle to approach remains.' },
+    { name: 'Scopophobia', storyCardText: 'Being watched can provoke acute fear; may avoid attention or become agitated under sustained scrutiny.' },
+    { name: 'Automatonophobia', storyCardText: 'Humanlike dolls, mannequins, and mechanical figures can inspire irrational dread; may avoid or react sharply to them.' },
+    { name: 'Aichmophobia', storyCardText: 'Exposed blades, needles, and sharp edges can provoke intense fear; may recoil or resist necessary contact.' },
+    { name: 'Entomophobia', storyCardText: 'Insects and insect-like swarms can trigger panic; may act rashly to escape or remove them.' },
+    { name: 'Astraphobia', storyCardText: 'Thunder and violent storms can trigger intense fear; may seek shelter urgently even when leaving is risky.' },
+    { name: 'Kleptomania', storyCardText: 'Feels recurring urges to take unattended objects, even those of little value, and may struggle to resist.' },
+    { name: 'Pyromania', storyCardText: 'Experiences fascination with fire and may feel urges to set something on fire simply to watch it burn.' },
+    { name: 'Arithmomania', storyCardText: 'Feels compelled to count objects or repeat numbers until they seem right, sometimes delaying urgent tasks.' },
+    { name: 'Bibliomania', storyCardText: 'May become possessive of books, records, or stored knowledge, driven to collect and preserve them even at a cost.' },
+    { name: 'Dipsomania', storyCardText: 'Experiences strong urges to drink alcohol, especially under strain, and may put obtaining it ahead of other concerns.' },
+    { name: 'Onomatomania', storyCardText: 'Certain words or phrases become intrusive fixations; may feel compelled to repeat, write, or dwell on them.' },
+    { name: 'Monomania', storyCardText: 'Can become consumed by a single idea or objective, dismissing other concerns even when doing so is costly.' },
+    { name: 'Trichotillomania', storyCardText: 'Experiences recurring urges to pull out strands of their own hair, particularly under stress, and may struggle to stop.' },
+    { name: 'Persecutory Delusions', storyCardText: 'May become convinced that others are watching, deceiving, or plotting against them, even with little evidence.' },
+    { name: 'Auditory Hallucinations', storyCardText: 'Hears voices, whispers, or sounds that others cannot hear and may respond as though they are real.' },
+    { name: 'Visual Hallucinations', storyCardText: 'Sees figures, movements, or objects that are not present and may react as though they are real.' },
+    { name: 'Depersonalization', storyCardText: 'May feel estranged from their own body, thoughts, or actions, as though observing themselves from outside.' },
+    { name: 'Derealization', storyCardText: 'May experience the world as unreal or staged, sometimes struggling to trust familiar surroundings.' },
+    { name: 'Dissociative Amnesia', storyCardText: 'May lose memory of portions of stressful events, leaving gaps they cannot readily explain.' },
+    { name: 'Compulsive Ritualism', storyCardText: 'Feels driven to repeat specific checks or rituals to ward off feared harm, even without any clear connection.' }
+  ],
+
+  // PSYCHOTIC ACTIONS — one rollable table of 30 acute break behaviors.
+  psychoticActions: [
+    'hears a familiar voice calling from an empty room',
+    'sees a threatening figure that vanishes when approached',
+    'feels insects crawling beneath their clothing despite finding none',
+    'believes a trusted companion has been replaced by an impostor',
+    'becomes convinced that harmless strangers intend to kill them',
+    'panics and flees toward the nearest perceived escape',
+    'freezes in terror, unable to respond to immediate danger',
+    'screams uncontrollably at a perceived threat others cannot see',
+    'lashes out violently at a nearby object in sudden panic',
+    'attempts to strike someone they mistakenly perceive as an attacker',
+    'shoves away anyone who approaches to offer help',
+    'destroys a harmless object believed to be cursed or dangerous',
+    'hears whispered commands but struggles to tell whether they are real',
+    'sees walls or floors appear to breathe and shift',
+    'believes the current events are a dream and acts recklessly',
+    'fails to recognize their own reflection and reacts with fear',
+    'becomes convinced they are being watched through invisible eyes',
+    'frantically searches for a nonexistent parasite or wound',
+    'repeats a protective phrase or ritual and refuses to stop',
+    'becomes fixated on an ordinary symbol as an omen of catastrophe',
+    'accuses an ally of secretly orchestrating the disaster',
+    'briefly loses awareness of where they are or how they arrived',
+    'confuses a memory of a past trauma with the present scene',
+    'breaks into inappropriate laughter and cannot readily regain composure',
+    'collapses into sobbing and pleads for an imagined person to help',
+    'refuses to enter a safe location believed to conceal a monster',
+    'attempts to barricade a door against an imagined pursuer',
+    'speaks to an absent person as though they are standing nearby',
+    'becomes convinced their body is changing into something inhuman',
+    'bolts from companions in a desperate attempt to escape a hallucination'
+  ],
+  // PERSONAL FEARS AND FLAWS — 40 distinct default vulnerabilities.
+  // ONE is randomly assigned to each new or previously unconfigured character.
+  // Kept in character.weakness (NOT in the Story Card) across every turn.
+  // These are psychological vulnerabilities, NOT automatic Sanity damage.
+  personalVulnerabilities: [
+    'Fear of being trapped in a sealed, confined space',
+    'Fear of running out of air or suffocating',
+    'Fear of being physically restrained and unable to escape',
+    'Fear of losing control over their own body',
+    'Fear of abandonment by trusted companions',
+    'Fear of being alone in complete darkness',
+    'Fear of falling from a great height',
+    'Fear of drowning in deep water',
+    'Fear of being exposed to the vacuum of space',
+    'Fear of an unseen parasite entering their body',
+    'Fear of being consumed by a living creature',
+    'Fear of having their thoughts controlled by an outside intelligence',
+    'Fear of having a trusted friend replaced by an impostor',
+    'Fear of losing their memories or identity',
+    'Fear of being buried alive or trapped underground',
+    'Fear of being burned alive in an inescapable fire',
+    'Fear of being hunted by something they cannot see',
+    'Fear of being separated from the group in hostile territory',
+    'Fear of being forced to hurt someone they love',
+    'Fear of witnessing a companion die while powerless to help',
+    'Flaw: cannot cope with being powerless to protect a dependent companion',
+    'Flaw: needs to be in control even when someone else must lead',
+    'Flaw: cannot bear being held responsible for a teammate getting hurt',
+    'Flaw: cannot accept evidence that a trusted friend has betrayed them',
+    'Flaw: places unbearable pressure on themselves never to fail',
+    'Flaw: cannot tolerate being publicly exposed as incompetent',
+    'Flaw: is unable to leave a companion behind even when rescue is impossible',
+    'Flaw: cannot face the consequences of disobeying a sworn duty',
+    'Flaw: cannot tolerate being betrayed by a trusted authority',
+    'Flaw: cannot cope with being helpless during a medical emergency',
+    'Flaw: needs absolute certainty before taking a life-or-death decision',
+    'Flaw: cannot handle having to choose which of two companions to save',
+    'Flaw: cannot endure the loss of an irreplaceable keepsake or memento',
+    'Flaw: cannot bear becoming dependent on others to survive',
+    'Flaw: cannot accept irreversible damage to their own body',
+    'Flaw: cannot tolerate having their deepest secret exposed to companions',
+    'Flaw: refuses to admit a crucial mistake even when lives depend on it',
+    'Flaw: cannot cope when a trusted plan fails catastrophically',
+    'Flaw: cannot endure being deliberately isolated or shunned by the group',
+    'Flaw: cannot bear the idea that their actions have doomed an innocent person'
+  ],
+
+  // Read only EXPLICIT personal-fear declarations from character Story Cards.
+  // Supported lines: Fear: ..., Flaw: ..., Personal Fear: ..., Weakness: ...
+  // This is a player-authored override, NOT AI interpretation of prose.
+  cardFear(card) {
+    const fields = [card.entry, card.description, card.text]
+      .filter(value => typeof value === 'string' && value.trim());
+    const content = fields.join('\n');
+    const match = content.match(/(?:^|\n)\s*(?:(?:personal|psychological)\s+)?(?:fear|flaw|weakness)\s*:\s*([^\r\n]+)/i);
+    return match ? match[1].trim().slice(0, 180) : '';
+  },
+
+  // Explicit script override, e.g. PSY.setPersonalFear('Juno Kestrel',
+  // 'Fear of losing control over her own body'). Lasts across future turns.
+  setPersonalFear(name, description) {
+    this.ensure();
+    const person = this.find(name);
+    const value = String(description || '').trim();
+    if (!person || !value) return false;
+    person.personalFearOverride = value.slice(0, 180);
+    person.weakness = person.personalFearOverride;
+    person.personalFearSource = 'manual';
+    person.personalFearAssignedValue = person.weakness;
+    return true;
+  },
+
+  // Choose unused defaults when possible; avoid rerolling existing assignments.
+  rollPersonalFear(database) {
+    const used = new Set(Object.values(database.people || {})
+      .map(person => String(person.weakness || person.fear || '').trim()));
+    const available = this.personalVulnerabilities.filter(item => !used.has(item));
+    return this.randomEntry(available.length ? available : this.personalVulnerabilities);
+  },
+
+
+  // ================================================================
+  // PERSONAL RECOVERY ACTIVITIES — assigned once, saved in state
+  // ================================================================
+  // These lists live in Library so scenario authors can customize them.
+  // Relaxation relieves ordinary Stress; self-healing restores Sanity.
+  relaxationActivities: [
+    'listening to familiar music',
+    'reading for pleasure',
+    'working quietly on a harmless personal project',
+    'cooking or sharing a comforting meal',
+    'taking a peaceful walk',
+    'watching a sunrise or sunset',
+    'making a cup of tea or coffee and resting',
+    'gardening or caring for plants',
+    'drawing, painting, or sketching',
+    'playing a musical instrument',
+    'playing a familiar game',
+    'sharing jokes with a trusted companion',
+    'taking a warm bath or shower',
+    'doing breathing exercises or meditation',
+    'watching a familiar film or show',
+    'caring for a pet',
+    'writing in a personal journal',
+    'crafting or tinkering without urgency',
+    'watching stars or a peaceful landscape',
+    'stretching or light exercise',
+    'having a quiet conversation with a friend',
+    'tidying and organizing a personal space',
+    'having a restful nap',
+    'doing a favorite hobby for enjoyment'
+  ],
+  selfHealingActivities: [
+    'spending meaningful quality time with family',
+    'reconnecting with a long-trusted friend',
+    'sharing a heartfelt conversation with someone they trust',
+    'receiving genuine comfort from a loved one',
+    'helping someone in need without expecting a reward',
+    'making amends for a past mistake',
+    'forgiving someone they have long resented',
+    'accepting forgiveness for something they regret',
+    'talking honestly about a painful experience',
+    'mourning a loss with supportive companions',
+    'engaging deeply in a beloved creative hobby',
+    'finishing a meaningful personal project',
+    'revisiting a place associated with safety and belonging',
+    'attending a cherished religious service',
+    'praying or performing a personally meaningful spiritual ritual',
+    'participating in a supportive community gathering',
+    'sharing a drink and a sincere conversation with close friends',
+    'making music with people they care about',
+    'creating art that helps express difficult feelings',
+    'writing a heartfelt letter to someone important',
+    'reuniting with someone they feared losing',
+    'celebrating a genuinely meaningful personal victory',
+    'confronting a long-held regret and making peace with it',
+    'keeping an important promise to someone they love',
+    'discovering that someone they saved is now safe',
+    'spending a restorative day in nature',
+    'volunteering for a cause they sincerely believe in',
+    'repairing a damaged friendship',
+    'sharing treasured memories with loved ones',
+    'engaging in deep meditation or reflective solitude',
+    'completing an act of personal reconciliation',
+    'teaching a valued skill to someone who needs it',
+    'receiving praise from someone whose respect matters deeply',
+    'overcoming a fear with trusted support',
+    'finding reassurance in a cherished tradition',
+    'finding closure after a painful unresolved event',
+    'enjoying an important holiday or family tradition',
+    'taking part in a trusted peer support gathering',
+    'rediscovering a personally meaningful purpose',
+    'sharing a vulnerable moment of trust and acceptance'
+  ],
+
+  // Explicit script overrides are optional. Values remain in state.
+  setRecoveryActivities(name, relax, selfHealing) {
+    this.ensure();
+    const character = this.find(name);
+    if (!character) return false;
+    if (Array.isArray(relax) && relax.length) {
+      character.relaxTriggers = relax.map(x => String(x || '').trim())
+        .filter(Boolean).slice(0, 3);
+      character.relaxActivitiesSource = 'manual';
+    }
+    if (Array.isArray(selfHealing) && selfHealing.length) {
+      character.selfHealingTriggers = selfHealing.map(x => String(x || '').trim())
+        .filter(Boolean).slice(0, 2);
+      character.selfHealingActivitiesSource = 'manual';
+    }
+    return true;
+  },
+  assignRecoveryActivities(character) {
+    // Existing values are never re-randomized on script upgrades/reloads.
+    if (!Array.isArray(character.relaxTriggers) || !character.relaxTriggers.length) {
+      const pool = this.relaxationActivities.slice();
+      const selected = [];
+      for (let i = 0; i < 3 && pool.length; i++) {
+        selected.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+      character.relaxTriggers = selected;
+      character.relaxActivitiesSource = 'random';
+      psyLog('PSY RELAX ACTIVITIES ASSIGNED: ' + character.name + ' | ' + selected.join('; '));
+    }
+    if (!Array.isArray(character.selfHealingTriggers) || !character.selfHealingTriggers.length) {
+      const pool = this.selfHealingActivities.slice();
+      const selected = [];
+      for (let i = 0; i < 2 && pool.length; i++) {
+        selected.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+      character.selfHealingTriggers = selected;
+      character.selfHealingActivitiesSource = 'random';
+      psyLog('PSY SELF-HEAL ACTIVITIES ASSIGNED: ' + character.name + ' | ' + selected.join('; '));
+    }
+  },
+
+  // ================================================================
+  // 1. PERSISTENT DATABASE
+  // ================================================================
+  // Script state is the source of truth; developed tendencies may sync to Story Cards.
+  // Existing scores survive subsequent turns and card scans.
+  init() {
+    if (!state.psyEngine) {
+      state.psyEngine = {
+        people: {},       // Character records, indexed by card ID or name
+        pending: [],      // Psychological effects awaiting narration
+        seen: {},         // Event markers processed during the current turn
+        turn: 0
+      };
+    }
+
+    return state.psyEngine;
+  },
+
+  // ================================================================
+  // 2. FIND CHARACTER STORY CARDS
+  // ================================================================
+  cards() {
+    if (typeof storyCards === 'undefined' || !Array.isArray(storyCards)) {
+      return [];
+    }
+
+    return storyCards.filter(card => {
+      const cardType = String(card.type || '');
+      return /^(character|characters)$/i.test(cardType);
+    });
+  },
+
+  // Prefer a card title; otherwise use the first comma-separated key.
+  name(card) {
+    const firstKey = String(card.keys || '').split(',')[0];
+    return String(card.title || firstKey).trim();
+  },
+
+  // The name stored in the character's derangements array is mechanical.
+  // Migrate older entries such as "Kleptomania - Compulsion to steal" safely.
+  derangementName(entry) {
+    const raw = typeof entry === 'string' ? entry :
+      (entry && typeof entry.name === 'string' ? entry.name : '');
+    return String(raw).split(/\s+-\s+/)[0].trim();
+  },
+
+  derangementProfile(entry) {
+    const name = this.derangementName(entry).toLowerCase();
+    return this.derangementProfiles.find(item => item.name.toLowerCase() === name) || null;
+  },
+
+  // Return JUST the personality language, never clinical labels or commands.
+  developedTendencies(character) {
+    const current = Array.isArray(character && character.derangements)
+      ? character.derangements : [];
+    const seen = new Set();
+    const text = [];
+    for (const item of current.slice(0, 5)) {
+      const name = this.derangementName(item).toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const profile = this.derangementProfile(item);
+      if (profile) text.push(profile.storyCardText);
+      else psyLog('PSY DERANGEMENT TEXT UNAVAILABLE: ' +
+        String(character && character.name || 'Unknown') + ' | ' + name);
+    }
+    return text;
+  },
+
+  // ================================================================
+  // 2a. SEPARATE PSYCHOLOGY STORY CARDS
+  // ================================================================
+  // This engine never writes to original Character / Characters Story Cards.
+  // A single PSYCHOLOGY card represents all developed tendencies for a person.
+  // The unique first trigger doubles as the card's requested name.
+  psychologyProfileTitle(character) {
+    return String(character && character.name || '').trim() + ' - Psych Profile';
+  },
+
+  // Triggers have a finite budget. One unique first key plus at most four
+  // inherited keys (not all original keys), with a total length cap.
+  psychologyProfileKeys(character, sourceCard) {
+    const MAX_KEYS = 5;
+    const MAX_TOTAL_LENGTH = 180;
+    const nameKey = this.psychologyProfileTitle(character);
+    if (!nameKey || nameKey.length > MAX_TOTAL_LENGTH) return '';
+    const chosen = [nameKey];
+    const seen = new Set([nameKey.toLowerCase()]);
+    const originals = String(sourceCard && sourceCard.keys || '').split(',');
+    for (const rawKey of originals) {
+      if (chosen.length >= MAX_KEYS) break;
+      const key = rawKey.replace(/[\r\n]+/g, ' ').trim();
+      if (!key || seen.has(key.toLowerCase())) continue;
+      if (chosen.join(', ').length + 2 + key.length > MAX_TOTAL_LENGTH) continue;
+      chosen.push(key);
+      seen.add(key.toLowerCase());
+    }
+    return chosen.join(', ');
+  },
+
+  psychologyProfileEntry(character, sourceOfDerangements) {
+    const tendencies = this.developedTendencies(sourceOfDerangements || character);
+    if (!tendencies.length) return '';
+    return 'Psychological profile for ' + character.name + '.\n' +
+      'Developed tendencies: ' + tendencies.join(' ') + '\n' +
+      'These tendencies can meaningfully influence behavior when relevant, ' +
+      'but they do not override the character’s established personality or agency.';
+  },
+
+  // A persistent bookkeeping record, not a replacement for checking real cards.
+  psychologyCardRecord(character) {
+    if (!character.psychCard || typeof character.psychCard !== 'object' ||
+        Array.isArray(character.psychCard)) {
+      character.psychCard = {
+        exists: false, name: '', triggers: '', entry: '', cardId: null
+      };
+    }
+    const p = character.psychCard;
+    if (typeof p.exists !== 'boolean') p.exists = false;
+    if (typeof p.name !== 'string') p.name = '';
+    if (typeof p.triggers !== 'string') p.triggers = '';
+    if (typeof p.entry !== 'string') p.entry = '';
+    if (p.cardId === undefined) p.cardId = null;
+    return p;
+  },
+
+  syncPsychologyProfileCard(character, sourceOfDerangements) {
+    if (!character || !character.name || typeof storyCards === 'undefined' ||
+        !Array.isArray(storyCards)) return false;
+    const record = this.psychologyCardRecord(character);
+    const source = this.cards().find(card =>
+      this.name(card).toLowerCase() === character.name.toLowerCase());
+    if (!source) {
+      psyLog('PSY PROFILE SKIPPED: Original character card missing for ' + character.name);
+      return false;
+    }
+
+    const title = this.psychologyProfileTitle(character);
+    const keys = this.psychologyProfileKeys(character, source);
+    const entry = this.psychologyProfileEntry(character, sourceOfDerangements);
+    if (!keys) {
+      psyLog('PSY PROFILE SKIPPED: No room for unique trigger for ' + character.name);
+      return false;
+    }
+    // Desired state is recorded even if AI Dungeon refuses the card operation.
+    record.name = title;
+    record.triggers = keys;
+    record.entry = entry;
+
+    // The card's type plus unique name (or known ID) defines ownership.
+    // NEVER locate cards by ordinary character triggers alone.
+    const matches = [];
+    for (let i = 0; i < storyCards.length; i++) {
+      const card = storyCards[i];
+      if (String(card.type || '').toUpperCase() !== 'PSYCHOLOGY') continue;
+      const first = String(card.keys || '').split(',')[0].trim();
+      if (first.toLowerCase() === title.toLowerCase() ||
+          String(card.title || '').trim().toLowerCase() === title.toLowerCase() ||
+          (record.cardId != null && card.id != null &&
+           String(card.id) === String(record.cardId))) {
+        matches.push(i);
+      }
+    }
+
+    // A prior interrupted run may have made duplicates. Delete only clearly
+    // engine-authored extra cards; never silently delete someone's custom text.
+    if (matches.length > 1 && typeof removeStoryCard === 'function') {
+      for (const i of matches.slice(1).reverse()) {
+        const old = storyCards[i];
+        if (!String(old.entry || '').startsWith(
+          'Psychological profile for ' + character.name + '.\n')) {
+          psyLog('PSY PROFILE DUPLICATE: Non-engine card left untouched for ' + title);
+          continue;
+        }
+        try { removeStoryCard(i); }
+        catch (error) {
+          psyLog('PSY PROFILE DUPLICATE CLEANUP FAILED: ' + title + ' | ' + String(error));
+        }
+      }
+    }
+
+    let index = storyCards.findIndex(card =>
+      String(card.type || '').toUpperCase() === 'PSYCHOLOGY' &&
+      (String(card.keys || '').split(',')[0].trim().toLowerCase() === title.toLowerCase() ||
+       String(card.title || '').trim().toLowerCase() === title.toLowerCase() ||
+       (record.cardId != null && card.id != null &&
+        String(card.id) === String(record.cardId))));
+    const found = index >= 0 ? storyCards[index] : null;
+    record.exists = !!found;
+    record.cardId = found && found.id != null ? found.id : null;
+
+    if (!entry) {
+      // No derangements: no Psychology card is necessary.
+      if (!found) return true;
+      if (!String(found.entry || '').startsWith(
+          'Psychological profile for ' + character.name + '.\n')) {
+        psyLog('PSY PROFILE REMOVE SKIPPED: Card contains unrecognized content for ' + title);
+        return false;
+      }
+      if (typeof removeStoryCard !== 'function') return false;
+      try {
+        removeStoryCard(index);
+        record.exists = false;
+        record.cardId = null;
+        psyLog('PSY PROFILE REMOVED: ' + title + ' | no developed tendencies');
+        return true;
+      } catch (error) {
+        psyLog('PSY PROFILE REMOVE FAILED: ' + title + ' | ' + String(error));
+        return false;
+      }
+    }
+
+    if (found) {
+      if (String(found.keys || '') === keys && String(found.entry || '') === entry)
+        return true; // Idempotent: no rewrites on ordinary turns.
+      if (!String(found.entry || '').startsWith(
+          'Psychological profile for ' + character.name + '.\n')) {
+        psyLog('PSY PROFILE UPDATE SKIPPED: Card contains unrecognized content for ' + title);
+        return false;
+      }
+      if (typeof updateStoryCard !== 'function') return false;
+      try {
+        // The optional fourth argument supplies the title in versions that
+        // support it; documented 3-argument versions ignore extra arguments.
+        updateStoryCard(index, keys, entry, 'PSYCHOLOGY', title);
+        record.exists = true;
+        record.cardId = storyCards[index] && storyCards[index].id != null
+          ? storyCards[index].id : record.cardId;
+        psyLog('PSY PROFILE UPDATED: ' + title + ' | ' +
+          this.developedTendencies(sourceOfDerangements || character).length +
+          ' developed tendencies | original character card untouched');
+        return true;
+      } catch (error) {
+        psyLog('PSY PROFILE UPDATE FAILED: ' + title + ' | ' + String(error));
+        return false;
+      }
+    }
+
+    if (typeof addStoryCard !== 'function') {
+      psyLog('PSY PROFILE CREATE UNAVAILABLE: addStoryCard missing');
+      return false;
+    }
+    try {
+      const result = addStoryCard(keys, entry, 'PSYCHOLOGY', title);
+      if (result === false) {
+        psyLog('PSY PROFILE CREATE BLOCKED: duplicate keys for ' + title);
+        return false;
+      }
+      // Verify the new card instead of trusting a stored exists flag.
+      const created = storyCards.find(card =>
+        String(card.type || '').toUpperCase() === 'PSYCHOLOGY' &&
+        String(card.keys || '') === keys);
+      record.exists = !!created;
+      record.cardId = created && created.id != null ? created.id : null;
+      if (created) {
+        psyLog('PSY PROFILE CREATED: ' + title + ' | PSYCHOLOGY | ' +
+          keys.split(',').length + ' triggers | ' +
+          this.developedTendencies(sourceOfDerangements || character).length +
+          ' developed tendencies | character card untouched');
+        return true;
+      }
+      psyLog('PSY PROFILE CREATE PENDING VERIFICATION: ' + title);
+      return false;
+    } catch (error) {
+      psyLog('PSY PROFILE CREATE FAILED: ' + title + ' | ' + String(error));
+      return false;
+    }
+  },
+
+  // Backward compatibility if another modifier still calls the old method.
+  syncDerangementStoryCard(character) {
+    return this.syncPsychologyProfileCard(character, character);
+  },
+
+  // ================================================================
+  // 3. INITIALIZE NEW CHARACTERS
+  // ================================================================
+  // Never reset an existing character's scores during discovery.
+  ensure() {
+    const database = this.init();
+
+    for (const card of this.cards()) {
+      const characterName = this.name(card);
+      if (!characterName) continue;
+
+      const characterKey = String(card.id || characterName.toLowerCase());
+
+      if (!database.people[characterKey]) {
+        database.people[characterKey] = {
+          name: characterName,
+          sanity: 100,
+          stress: 100,
+          stressor: '',
+          weakness: '',
+          personalFearSource: '',
+          personalFearAssignedValue: '',
+          lastSanityBand: 100,
+          lastEvent: '',
+          derangements: []
+        };
+      }
+
+      const character = database.people[characterKey];
+      character.name = characterName;
+      const psychCard = this.psychologyCardRecord(character);
+      psychCard.name = this.psychologyProfileTitle(character);
+
+      // Precedence: explicit manual override > Story Card declaration >
+      // an existing/custom weakness > randomly assigned default.
+      // Protect previous scores, stressor, cooldowns, and derangements.
+      const manual = String(character.personalFearOverride || '').trim();
+      const declared = this.cardFear(card);
+      const existing = String(character.weakness || character.fear || '').trim();
+      const assigned = String(character.personalFearAssignedValue || '').trim();
+      const directEdit = existing && assigned && existing !== assigned;
+      let wanted = existing;
+      let source = String(character.personalFearSource || '');
+
+      if (manual) {
+        wanted = manual;
+        source = 'manual';
+      } else if (directEdit) {
+        // A custom state edit must not be overwritten by card/default values.
+        wanted = existing;
+        source = 'manual';
+        character.personalFearOverride = existing;
+      } else if (declared) {
+        wanted = declared;
+        source = 'story_card';
+      } else if (existing) {
+        // Migration: preserve an already-established custom vulnerability.
+        wanted = existing;
+        source = source || 'existing';
+      } else {
+        wanted = this.rollPersonalFear(database);
+        source = 'random';
+        if (wanted) psyLog('PSY PERSONAL FEAR ASSIGNED: ' + characterName +
+          ' | ' + wanted);
+      }
+      character.weakness = wanted;
+      character.personalFearSource = source;
+      character.personalFearAssignedValue = wanted;
+      this.assignRecoveryActivities(character);
+    }
+  },
+
+  // ================================================================
+  // 4. LOOK UP A CHARACTER BY NAME
+  // ================================================================
+  find(name) {
+    const requestedName = String(name || '').trim().toLowerCase();
+    const characters = Object.values(this.init().people);
+
+    return characters.find(character => {
+      return character.name.toLowerCase() === requestedName;
+    });
+  },
+
+  // Pick one entry from any nonempty reaction table.
+  randomEntry(table) {
+    if (!table.length) return null;
+    return table[Math.floor(Math.random() * table.length)];
+  },
+
+  // ================================================================
+  // 5. APPLY STRESS OR SANITY LOSS
+  // ================================================================
+  // Called by the Output modifier after an AI-generated event marker.
+  // Returns false if the character, type, or amount is invalid.
+  change(name, kind, loss, cause) {
+    const character = this.find(name);
+    if (!character) return false;
+    if (kind !== 'stress' && kind !== 'sanity') return false;
+
+    const amount = Math.max(0, Math.min(100, Number(loss) || 0));
+    if (amount === 0) return false;
+
+    const previousScore = character[kind];
+    character[kind] = Math.max(0, previousScore - amount);
+    character.lastEvent = cause || '';
+
+    if (kind === 'stress') {
+      this.handleStress(character);
+    } else {
+      this.handleSanity(character, previousScore);
+    }
+
+    return true;
+  },
+
+  // Stress is temporary: at zero, roll a reaction and reset to 100.
+  handleStress(character) {
+    if (character.stress > 0) return;
+
+    const reaction = this.randomEntry(this.stressReactions);
+    if (reaction) {
+      this.init().pending.push(
+        `${character.name} experiences a stress reaction: ${reaction}.`
+      );
+    }
+
+    character.stress = 100;
+  },
+
+  // Sanity is cumulative and NEVER resets after a psychotic action.
+  // Every crossed 5-point boundary adds a general perception warning.
+  // Crossing 80, 60, 40, 20, or 0 also rolls ONE psychotic action.
+  // Large single losses trigger only the LOWEST threshold crossed.
+  handleSanity(character, previousScore) {
+    const currentScore = character.sanity;
+    const database = this.init();
+
+    const oldFivePointBand = Math.ceil(previousScore / 5) * 5;
+    const newFivePointBand = Math.ceil(currentScore / 5) * 5;
+
+    if (newFivePointBand < oldFivePointBand) {
+      database.pending.push(
+        `${character.name}'s perception is becoming less reliable.`
+      );
+    }
+
+    const breakThresholds = [80, 60, 40, 20, 0];
+    const crossedThresholds = breakThresholds.filter(threshold => {
+      return previousScore > threshold && currentScore <= threshold;
+    });
+
+    if (crossedThresholds.length === 0) return;
+
+    const lowestCrossedThreshold = Math.min(...crossedThresholds);
+    character.lastSanityBand = lowestCrossedThreshold;
+
+    const action = this.randomEntry(this.psychoticActions);
+    if (action) {
+      database.pending.push(
+        `${character.name} suffers a psychotic episode at sanity ` +
+        `${lowestCrossedThreshold}: ${action}.`
+      );
+    }
+  },
+
+  // ================================================================
+  // 6. READ AI-GENERATED EVENT MARKERS
+  // ================================================================
+  // Expected: [PSY_EVENT|John|STRESS|5|Witnessed a death]
+  // Remove recognized markers from the visible output, even duplicates.
+  applyMarkers(text) {
+    const database = this.init();
+    const markerPattern = /\[PSY_EVENT\|([^|\]\n]+)\|(STRESS|SANITY)\|(1|2|5|10)\|([^\]\n]{1,100})\]/gi;
+
+    return String(text).replace(markerPattern, (marker, name, kind, amount, cause) => {
+      const signature = [
+        database.turn,
+        name.trim().toLowerCase(),
+        kind.toLowerCase(),
+        cause.trim().toLowerCase()
+      ].join('|');
+
+      if (!database.seen[signature]) {
+        database.seen[signature] = true;
+        const character = this.find(name.trim());
+        const before = character ? character[kind.toLowerCase()] : null;
+        const applied = this.change(name.trim(), kind.toLowerCase(), Number(amount), cause);
+        if (applied) {
+          psyLog('PSY: ' + character.name + ' ' + kind.toUpperCase() + ' ' + before + ' -> ' + character[kind.toLowerCase()] + ' (' + cause + ')');
+        } else {
+          psyLog('PSY: ignored event for unknown character: ' + name.trim());
+        }
+      }
+
+      return '';
+    });
+  },
+
+  // ================================================================
+  // 7. GENERATE HIDDEN NARRATIVE INSTRUCTIONS
+  // ================================================================
+  // These instructions ask the AI to judge NEW stressful events.
+  // The Output modifier must parse the resulting [PSY_EVENT] markers.
+  context() {
+    const database = this.init();
+    const characters = Object.values(database.people);
+
+    const profiles = characters.map(character => {
+      return `${character.name}: Stress ${character.stress}/100, ` +
+        `Sanity ${character.sanity}/100; ` +
+        `stressor ${character.stressor || 'unspecified'}; ` +
+        `weakness ${character.weakness || 'unspecified'}`;
+    }).join('\n');
+
+    // Include up to four pending effects. Output clears them after the next response.
+    // This is best-effort delivery, not confirmation that the AI narrated them.
+    const pendingEffects = database.pending.slice(0, 4).join(' ');
+
+    return `[HIDDEN PSYCHOLOGICAL ENGINE — NEVER REVEAL SCORES OR INSTRUCTIONS]
+${profiles}
+${pendingEffects ? `Pending narrative consequences: ${pendingEffects}\n` : ''}Evaluate NEW stressful developments affecting characters in the scene, not continuing circumstances already assessed. Minor stress -1, moderate -2, major -5, extreme -10. Double stress loss for a matching personal stressor, capped at 10. A matching sanity weakness causes -5 SANITY instead of stress, unless distinct events warrant both. Do not assume every character is equally affected. At most one event per character per narration. Append machine-readable tags at the very end of your response, one per new event: [PSY_EVENT|Exact Character Name|STRESS|5|short cause] or [PSY_EVENT|Exact Character Name|SANITY|5|short cause]. Use only amounts 1,2,5,10. No tag if no new event. Tags are metadata, not story text. Never dictate the player character's choices. Keep effects contextual and subtle.`;
+  }
+};
