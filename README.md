@@ -22,26 +22,47 @@ Rather than forcing a particular plot, MindRift lets psychological consequences 
 - **Narrative safeguards** — qualification thresholds, cooldowns, evidence checks, and metadata cleanup help protect the story from inaccurate assessments and leaked instructions.
 - **Scenario-independent design** — no fixed cast or setting required; suitable for horror, survival, science fiction, fantasy, and more.
 
-## Installation
+## Installation — Copy, Paste, Play
 
-MindRift uses all four sections of AI Dungeon's scenario scripting system. **Scripting must be enabled for the scenario.**
+**You do not need to know JavaScript.** MindRift comes as four ready-to-use scripts. You only have to copy each one into the correct box in AI Dungeon.
 
-1. Open your scenario's **Scripts** editor.
-2. Copy each file into its corresponding section:
+### Step 1 — Open your scenario
 
-   | Repository file | AI Dungeon section |
-   | --- | --- |
-   | `01_Library.js` | **Library** |
-   | `02_Input_Modifier.js` | **Input Modifier** |
-   | `03_Context_Modifier.js` | **Context Modifier** |
-   | `04_Output_Modifier.js` | **Output Modifier** |
+1. Go to [AI Dungeon](https://aidungeon.com/) and open the **scenario you want to edit** (not an ongoing adventure).
+2. Open the scenario's **Scripts** editor and **enable scripting** for that scenario.
+3. You should see four places to put code: **Library**, **Input Modifier**, **Context Modifier**, and **Output Modifier**.
 
-   If your download contains the `.txt` versions instead, they contain the same paste-ready script sections.
+### Step 2 — Copy each file into the matching box
 
-3. Make **Character** Story Cards for the player character and any NPCs you want tracked. MindRift recognizes internal Story Card types `character` and `characters`.
-4. Save your scenario and start playing normally. You don't have to enter commands, track points, or write assessment tags yourself.
+Do these **one at a time**. Open the file, select **everything** (`Ctrl+A` or `Cmd+A`), **copy** (`Ctrl+C` or `Cmd+C`), click the matching AI Dungeon script box, and **paste** (`Ctrl+V` or `Cmd+V`).
 
-**Important:** Paste each **entire** file into its matching script section. Don't combine the scripts in one field or mix files from different MindRift versions.
+| Open this MindRift file | Copy **all** its text into this AI Dungeon box |
+| --- | --- |
+| **`01_Library.txt`** | **Library** |
+| **`02_Input_Modifier.txt`** | **Input Modifier** |
+| **`03_Context_Modifier.txt`** | **Context Modifier** |
+| **`04_Output_Modifier.txt`** | **Output Modifier** |
+
+**In plain English:**
+
+- Open **`01_Library.txt`** → copy everything → paste into **Library**.
+- Open **`02_Input_Modifier.txt`** → copy everything → paste into **Input Modifier**.
+- Open **`03_Context_Modifier.txt`** → copy everything → paste into **Context Modifier**.
+- Open **`04_Output_Modifier.txt`** → copy everything → paste into **Output Modifier**.
+
+All four scripts in this repository are **`.txt` files**. They contain JavaScript code, but you do **not** need to rename them or convert them to `.js`. Just copy the text into the matching AI Dungeon box. Don't paste all four files into one box, and don't leave any part of a file out.
+
+### Step 3 — Make sure your characters have Story Cards
+
+MindRift discovers characters from your scenario's **Character** Story Cards. Create or keep one for each character you want tracked, including your player character if you want them tracked. The card's type/category should be **Character** (internally `character` or `characters`). You can use your existing Character cards; no special template is required.
+
+### Step 4 — Save and play
+
+**Save the scenario**, start an adventure from it, and play normally. That's it. You don't have to type special commands, assign points, or manage scores. MindRift works quietly in the background.
+
+**Quick checklist:** Scripting enabled? Four files in four matching boxes? Character Story Cards present? Scenario saved? You're ready.
+
+> **Already have other scripts?** MindRift uses all four script sections. Back up any existing scripts before replacing their contents; simply pasting MindRift over another script may remove that script's functionality.
 
 ### Optional: set a character's fear or flaw
 
