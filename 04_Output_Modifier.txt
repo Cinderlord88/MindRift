@@ -1,0 +1,824 @@
+// MINDRIFT v1.0 — OUTPUT MODIFIER (LIVE PSYCHOLOGICAL ENGINE)
+// Persists Stress/Sanity changes, applies cooldowns and recovery safeguards,
+// synchronizes Psychology cards, and removes assessment metadata from narration.
+// Built from the tested v8.6 meta-leak shield; all gameplay rules are retained.
+// On first activation, preserve character scores but clear legacy test timing
+// metadata; the first assessment establishes a clean live baseline.
+// Recovery guards: qualifying Stress/Sanity crises block scene-wide CALM/RELAX;
+// SELF_HEAL and TREATMENT must name the recipient in the cited paragraph.
+// Hidden analysis leakage is removed narrowly to preserve ordinary prose.
+// Archived shadow-mode compatibility code is intentionally left inactive.
+const modifier = (text) => {
+  // Set true temporarily to inspect each candidate, score and cooldown.
+  // Routine diagnostics are suppressed in public release mode; noteworthy
+  // state changes, cleanup warnings and generation failures remain visible.
+  const VERBOSE_DIAGNOSTICS = false;
+  const psyLog = message => {
+    if (VERBOSE_DIAGNOSTICS ||
+        /^(?:MINDRIFT LIVE ACTIVATED:|PSY WARNING:|PSY PROFILE SYNC ERROR:|PSY (?:STRESS (?:APPLIED|OUTBURST TRIGGERED)|SANITY APPLIED|STRESS RECOVERY APPLIED|SANITY RECOVERY APPLIED|DERANGEMENT (?:ADDED|HEALING|HEALED)|CLEANUP: (?:STRATEGIC THOUGHT|Leaked event-history)))/.test(String(message))) {
+      log(message);
+    }
+  };
+  psyLog("=== MINDRIFT OUTPUT IS RUNNING ===");
+  PSY.ensure();
+  const db = PSY.init();
+  db.assessment ||= { phase: "requested" };
+  const assessment = db.assessment;
+  db.recentEvents ||= [];
+  db.cooldowns ||= {};
+  db.pending ||= [];
+  // Activate once, clearing ONLY prior shadow-mode timing and audit metadata.
+  // Leave real character data, saved fears/activities and shadow history intact.
+  // A separate live Context Modifier reads REAL scores from the first turn.
+  const activatingLive = db.mindRiftMode !== 'live';
+  if (activatingLive) {
+    db.mindRiftMode = 'live';
+    db.mindRiftLiveActivatedAt = Number(db.turn) || 0;
+    db.cooldowns = {};
+    db.recentEvents = [];
+    db.pending = [];
+    db.seen = {};
+    db.qualificationAudit = [];
+    psyLog('MINDRIFT LIVE ACTIVATED: shadow scores NOT migrated; test cooldowns and event history cleared');
+    psyLog('MINDRIFT LIVE ACTIVATED: first output assessment will be skipped (fresh live baseline)');
+  }
+  // Only retire pending reactions that existed BEFORE this output pass.
+  // Fresh live-mode outbursts generated below must survive for the next
+  // Context Modifier run to inject into the story.
+  const priorPendingCount = Math.min(4, db.pending.length);
+  db.seen ||= {};
+  db.qualificationAudit ||= [];
+  if (typeof db.lastValidNarrative !== "string") db.lastValidNarrative = "";
+
+  // LIVE MODE: persist deductions/recovery directly into character records.
+  const TEST_MODE = false;
+  // Live PSYCHOLOGY cards sync from real character derangements only.
+  // This does not modify the original Character Story Cards.
+  const SYNC_PSYCHOLOGY_CARDS = true;
+  const STRESS_THRESHOLD = 80;
+  const SANITY_THRESHOLD = 90; // Specific personal fears/flaws ONLY.
+  const STRESS_COOLDOWN_TURNS = 15;
+  const SANITY_COOLDOWN_TURNS = 30; // Direct personal fear/flaw events only.
+  const CALM_THRESHOLD = 80;      // Confidence that the turn was genuinely safe.
+  const RELAX_THRESHOLD = 85;     // Deliberate, credible relaxation.
+  const SANITY_RECOVERY_THRESHOLD = 90; // Meaningful self-healing or completed care.
+  const RELAX_BONUS_COOLDOWN_TURNS = 15;
+  const SANITY_RECOVERY_COOLDOWN_TURNS = 10;
+
+  // Stress outbursts still cause -5 Sanity regardless of the direct-Sanity cooldown.
+  const MAX_CANDIDATES = 5;
+  const raw = String(text ?? "");
+
+  // Retain the archived shadow ledger for diagnostics/rollback but never read
+  // its scores in LIVE mode. Live event history has its own separate record.
+  db.linkedPreview ||= { characters: {}, history: [], mode: "shadow" };
+  const preview = db.linkedPreview;
+  preview.characters ||= {};
+  preview.history ||= [];
+  db.liveHistory ||= [];
+  const eventHistory = TEST_MODE ? preview.history : db.liveHistory;
+
+  const clampScore = value => Math.max(0, Math.min(100,
+    Number.isFinite(Number(value)) ? Number(value) : 100));
+  const fearFor = character => String(character.weakness || character.fear || "").trim();
+  const previewFor = character => {
+    const key = character.name.toLowerCase();
+    if (!preview.characters[key]) {
+      preview.characters[key] = {
+        name: character.name,
+        stress: clampScore(character.stress),
+        sanity: clampScore(character.sanity),
+        derangements: Array.isArray(character.derangements)
+          ? character.derangements.slice() : []
+      };
+    }
+    return preview.characters[key];
+  };
+  // AI-generated names sometimes omit an honorific from a Story Card,
+  // e.g. "Elias Thorne" instead of "Dr. Elias Thorne". Accept only an
+  // unambiguous FULL name after removing an initial title. Never resolve a
+  // first name or a surname alone, and never use fuzzy/substring matching.
+  // Scope this tolerance to assessment validation; do not change Library
+  // identity keys, Story Card names, or persistent state records.
+  const nameWithoutTitle = value => String(value || '')
+    .trim().replace(/\s+/g, ' ')
+    .replace(/^(?:(?:dr|doctor|capt|captain|sister|brother|prof|professor|mr|mrs|ms|sir|dame|lady|lord|father|mother)\.?\s+)+/i, '')
+    .toLowerCase();
+  const resolveAssessmentCharacter = requested => {
+    const exact = typeof PSY.find === 'function'
+      ? PSY.find(requested)
+      : Object.values(db.people || {}).find(p => p && p.name &&
+          p.name.toLowerCase() === String(requested || '').trim().toLowerCase());
+    if (exact) return exact;
+    const wanted = nameWithoutTitle(requested);
+    if (wanted.split(' ').length < 2) return null;
+    const matches = Object.values(db.people || {}).filter(p => p && p.name &&
+      nameWithoutTitle(p.name) === wanted);
+    if (matches.length !== 1) return null;
+    psyLog('PSY NAME RESOLVED: ' + String(requested).trim() +
+      ' -> ' + matches[0].name + ' | unique full-name match');
+    return matches[0];
+  };
+  // Evidence guard for high-impact (+10) Sanity recovery. The AI sometimes
+  // proposes SELF_HEAL for an OFFSCREEN character while citing a paragraph
+  // entirely about someone else. Requiring a named participant in that very
+  // paragraph favors missed recovery over an invented gain. A uniquely
+  // identifiable first name is allowed because narration often omits titles
+  // ("Elias" for "Dr. Elias Thorne"). No surname-only or vague pronoun match.
+  const sanityRecoveryEvidenceNames = (character, evidence) => {
+    const normalized = nameWithoutTitle(character.name);
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    if (!tokens.length) return false;
+    const words = String(evidence || '').toLowerCase();
+    const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const mentions = name => new RegExp('(?:^|[^\\p{L}\\p{N}])' +
+      name.split(/\s+/).map(escapeRegex).join('\\s+') +
+      '(?=$|[^\\p{L}\\p{N}])', 'iu').test(words);
+    // Full name is sufficient even when a title appears before it.
+    if (mentions(normalized)) return true;
+    const first = tokens[0];
+    if (first.length < 3) return false;
+    const owners = Object.values(db.people || {}).filter(p => p && p.name &&
+      nameWithoutTitle(p.name).split(/\s+/)[0] === first);
+    return owners.length === 1 && mentions(first);
+  };
+  const rollDerangement = (current, name) => {
+    const profiles = Array.isArray(PSY.derangementProfiles)
+      ? PSY.derangementProfiles : [];
+    const normalize = value => typeof PSY.derangementName === 'function'
+      ? PSY.derangementName(value).toLowerCase()
+      : String(value || '').toLowerCase();
+    const used = new Set(current.derangements.map(normalize));
+    const available = profiles.filter(profile => !used.has(normalize(profile.name)));
+    if (!available.length) return null;
+    // A human-readable sentence is attached to each selected mechanical name.
+    return available[Math.floor(Math.random() * available.length)].name;
+  };
+  const syncPsychologyCard = (character, current) => {
+    if (!SYNC_PSYCHOLOGY_CARDS || !character || !current ||
+        typeof PSY.syncPsychologyProfileCard !== 'function') return;
+    // Crucial: TEST_MODE's active derangements are in db.linkedPreview,
+    // NOT character.derangements. Pass the proper ledger explicitly.
+    try { PSY.syncPsychologyProfileCard(character, current); }
+    catch (error) { psyLog('PSY PROFILE SYNC ERROR: ' + String(error)); }
+  };
+  const addDerangements = (current, name, character) => {
+    const desired = Math.min(5, Math.floor((100 - current.sanity) / 20));
+    let changed = false;
+    while (current.derangements.length < desired) {
+      const entry = rollDerangement(current, name);
+      if (!entry) break;
+      current.derangements.push(entry);
+      changed = true;
+      const profile = typeof PSY.derangementProfile === 'function'
+        ? PSY.derangementProfile(entry) : null;
+      psyLog('PSY DERANGEMENT ' + (TEST_MODE ? 'PREVIEW' : 'ADDED') +
+        ': ' + name + ' | Sanity ' + current.sanity + ' | ' + entry +
+        ' | Developed tendency: ' + (profile ? profile.storyCardText : '(unavailable)'));
+    }
+    // Only EXPLICIT Sanity recovery above a threshold removes an entry.
+    if (current.derangements.length > desired) {
+      const removed = current.derangements.splice(desired);
+      changed = true;
+      psyLog('PSY DERANGEMENT HEALING: ' + name + ' | Removed ' + removed.length +
+        ' at Sanity ' + current.sanity);
+    }
+    if (changed) syncPsychologyCard(character, current);
+  };
+  const applySanity = (current, name, amount, reason, character) => {
+    const before = current.sanity;
+    current.sanity = Math.max(0, before - amount);
+    psyLog("PSY SANITY " + (TEST_MODE ? "PREVIEW" : "APPLIED") +
+      ": " + name + " | " + before + " -> " + current.sanity +
+      " | -" + (before-current.sanity) + " | " + reason);
+    addDerangements(current, name, character);
+  };
+  const applyRecovery = (character, kind, cause) => {
+    const current = TEST_MODE ? previewFor(character) : character;
+    const name = character.name;
+    const key = name.toLowerCase();
+    db.cooldowns[key] ||= { STRESS: null, SANITY: null };
+    const stamp = db.cooldowns[key];
+    let gain = 0;
+    let newGain = 0;
+    if (kind === 'CALM' || kind === 'RELAX') {
+      const previous = clampScore(current.stress);
+      const bonusDue = stamp.RELAX == null ||
+        db.turn - stamp.RELAX >= RELAX_BONUS_COOLDOWN_TURNS;
+      const bonus = kind === 'RELAX' && bonusDue ? 10 : 0;
+      // Initial deliberate relief is exactly +10. On later turns of
+      // continued relaxation (including cooldown), it is +1 per turn.
+      // Never stack a CALM gain on top of the same turn's relief bonus.
+      current.stress = Math.min(100, previous + (bonus > 0 ? 10 : 1));
+      gain = current.stress - previous;
+      if (bonus > 0 && gain > 0) stamp.RELAX = db.turn;
+      if (kind === 'RELAX' && !bonusDue) {
+        psyLog('PSY RELAX BONUS COOLDOWN: ' + name +
+          ' | ' + (RELAX_BONUS_COOLDOWN_TURNS - (db.turn - stamp.RELAX)) +
+          ' turns remaining; ordinary +1 still allowed');
+      }
+      psyLog('PSY STRESS RECOVERY ' + (TEST_MODE ? 'PREVIEW' : 'APPLIED') +
+        ': ' + name + ' | ' + previous + ' -> ' + current.stress +
+        ' | +' + gain + ' | ' + kind + (bonus > 0 ? ' | +10 relief eligible' : ''));
+    } else {
+      const previous = clampScore(current.sanity);
+      const last = stamp.SANITY_RECOVERY;
+      const remaining = last == null ? 0 :
+        Math.max(0, SANITY_RECOVERY_COOLDOWN_TURNS - (db.turn - last));
+      if (remaining > 0) {
+        psyLog('PSY SANITY RECOVERY COOLDOWN: ' + name + ' | ' +
+          remaining + ' turns remaining');
+        return false;
+      }
+      current.sanity = Math.min(100, previous + 10);
+      gain = current.sanity - previous;
+      if (gain > 0) stamp.SANITY_RECOVERY = db.turn;
+      psyLog('PSY SANITY RECOVERY ' + (TEST_MODE ? 'PREVIEW' : 'APPLIED') +
+        ': ' + name + ' | ' + previous + ' -> ' + current.sanity +
+        ' | +' + gain + ' | ' + kind);
+      if (gain > 0) {
+        // Reuse the EXISTING reconciliation and Story Card sync behavior.
+        addDerangements(current, name, character);
+      }
+    }
+    if (gain <= 0) return false;
+    if (!TEST_MODE) character.lastEvent = cause;
+    eventHistory.push({ turn: db.turn, name, kind, amount: -gain,
+      stress: current.stress, sanity: current.sanity,
+      derangements: current.derangements.length, test: TEST_MODE });
+    if (eventHistory.length > 120) eventHistory.splice(0, eventHistory.length - 120);
+    psyLog('PSY LINKED STATE ' + (TEST_MODE ? 'PREVIEW' : 'LIVE') +
+      ': ' + name + ' | Stress ' + current.stress +
+      ' | Sanity ' + current.sanity +
+      ' | Derangements ' + current.derangements.length);
+    return true;
+  };
+
+  const applyLinkedEvent = (character, kind, amount, cause) => {
+    const current = TEST_MODE ? previewFor(character) : character;
+    const name = character.name;
+    if (!Array.isArray(current.derangements)) current.derangements = [];
+    if (kind === "SANITY") {
+      applySanity(current, name, 10, "direct personal fear/flaw", character);
+    } else {
+      const before = clampScore(current.stress);
+      current.stress = Math.max(0, before - amount);
+      psyLog("PSY STRESS " + (TEST_MODE ? "PREVIEW" : "APPLIED") +
+        ": " + name + " | " + before + " -> " + current.stress +
+        " | proposed -" + amount);
+      if (current.stress <= 0 && before > 0) {
+        const reaction = typeof PSY.randomEntry === "function"
+          ? PSY.randomEntry(PSY.stressReactions || []) : null;
+        psyLog("PSY STRESS OUTBURST " + (TEST_MODE ? "PREVIEW" : "TRIGGERED") +
+          ": " + name + " | " + (reaction || "unspecified reaction"));
+        if (!TEST_MODE && reaction)
+          db.pending.push(name + " experiences a stress reaction: " + reaction + ".");
+        current.stress = 100;
+        applySanity(current, name, 5, "stress outburst", character);
+        psyLog("PSY STRESS RESET: " + name + " -> 100");
+      }
+    }
+    if (!TEST_MODE) character.lastEvent = cause;
+    eventHistory.push({ turn: db.turn, name, kind,
+      amount: kind === "SANITY" ? 10 : amount,
+      stress: current.stress, sanity: current.sanity,
+      derangements: current.derangements.length, test: TEST_MODE });
+    if (eventHistory.length > 120) eventHistory.splice(0, eventHistory.length - 120);
+    psyLog("PSY LINKED STATE " + (TEST_MODE ? "PREVIEW" : "LIVE") +
+      ": " + name + " | Stress " + current.stress +
+      " | Sanity " + current.sanity +
+      " | Derangements " + current.derangements.length);
+  };
+
+  // Healing is deliberately explicit: restoring Sanity above a 20-point
+  // boundary removes excess derangements. It NEVER happens just from calm
+  // narration. If game logic updates a score, reconcile on the next turn.
+  const reconcileHealed = (current, character) => {
+    if (!current || !Array.isArray(current.derangements)) return;
+    const allowed = Math.min(5, Math.floor((100 - clampScore(current.sanity)) / 20));
+    if (current.derangements.length > allowed) {
+      const removed = current.derangements.splice(allowed);
+      psyLog("PSY DERANGEMENT HEALED " + (TEST_MODE ? "(PREVIEW) " : "") +
+        String(current.name || "Unknown") + " | " + removed.length +
+        " cleared after Sanity restoration");
+      syncPsychologyCard(character, current);
+    }
+  };
+  if (TEST_MODE) {
+    // Migration: cards for already-earned test derangements, including
+    // Talia's Bibliomania, are created on the first turn after installation.
+    for (const current of Object.values(preview.characters)) {
+      const character = typeof PSY.find === 'function'
+        ? PSY.find(current.name) : null;
+      if (!character) continue;
+      reconcileHealed(current, character);
+      syncPsychologyCard(character, current);
+    }
+  } else {
+    for (const character of Object.values(db.people || {})) {
+      reconcileHealed(character, character);
+      syncPsychologyCard(character, character);
+    }
+  }
+
+  // Retain the existing manual #psytest behavior.
+  if (assessment.phase === "assessing") {
+    assessment.resultText = raw;
+    assessment.phase = raw.trim() ? "idle" : "requested";
+    psyLog("PSY: Manual assessment received");
+    const events = typeof PSY.parseAssessment === "function"
+      ? PSY.parseAssessment(raw) : [];
+    psyLog("PSY: Manual valid events " + events.length);
+    psyLog("PSY: Turn counter unchanged at " + db.turn);
+    return { text: raw.trim() || "[Psychological assessment returned no text.]" };
+  }
+
+  db.turn = (Number(db.turn) || 0) + 1;
+  db.seen = {};
+  psyLog("PSY TURN OUTPUT COUNTER: " + db.turn);
+
+  const audit = (candidate, decision, why, excerpt) => {
+    db.qualificationAudit.push({
+      turn: db.turn,
+      name: candidate.name || "",
+      kind: candidate.kind || "",
+      loss: candidate.loss || 0,
+      paragraph: candidate.paragraph || 0,
+      score: candidate.score == null ? null : candidate.score,
+      decision,
+      reason: why,
+      excerpt: String(excerpt || "").slice(0, 180)
+    });
+    if (db.qualificationAudit.length > 100) {
+      db.qualificationAudit = db.qualificationAudit.slice(-100);
+    }
+  };
+
+  let story = raw.replace(/\r\n?/g, "\n");
+  const extracted = [];
+  let consumedMarkers = 0;
+
+  // Remove an optional old preamble only when it appears at the beginning.
+  story = story.replace(/^\s*(?:Your response is:|Assessment results?:)\s*/i, "");
+
+  // Read leading assessment records one at a time, instead of requiring
+  // perfect parentheses. Both a shared block and separate parentheses work.
+  // Never eat the narrative that follows the final closing parenthesis.
+  for (let i = 0; i < 12; i++) {
+    const leadingWhitespace = /^\s*/.exec(story)[0];
+    const remaining = story.slice(leadingWhitespace.length);
+    const none = /^(?:\(\s*PSY_NONE\s*\)|PSY_NONE(?=\s|$))/i.exec(remaining);
+    if (none) {
+      extracted.push("PSY_NONE");
+      consumedMarkers++;
+      story = remaining.slice(none[0].length);
+      continue;
+    }
+
+    const beginning = /^\(?\s*PSY_[ \t]*EVENT\s*\|/i.exec(remaining);
+    if (!beginning) {
+      // Standalone closing parenthesis from a shared multiline block.
+      const close = /^\)\s*(?=\n|$)/.exec(remaining);
+      if (close && consumedMarkers) {
+        story = remaining.slice(close[0].length);
+        continue;
+      }
+      break;
+    }
+
+    // Consume just this one assessment line. A same-line closing ')'
+    // is a boundary; do not consume story text attached to its right.
+    const tail = remaining.slice(beginning[0].length);
+    const closeAt = tail.indexOf(")");
+    const newlineAt = tail.indexOf("\n");
+    let lineEnd = remaining.length;
+    let consumeClosing = false;
+    if (closeAt >= 0 && (newlineAt < 0 || closeAt < newlineAt)) {
+      lineEnd = beginning[0].length + closeAt;
+      consumeClosing = true;
+    } else if (newlineAt >= 0) {
+      lineEnd = beginning[0].length + newlineAt;
+    }
+    const record = remaining.slice(0, lineEnd).replace(/^\(?\s*/, "").trim();
+    extracted.push(record);
+    consumedMarkers++;
+    story = remaining.slice(lineEnd + (consumeClosing ? 1 : 0));
+    if (consumedMarkers > 10) break;
+  }
+
+  // Parse independently. Malformed candidates are skipped, not allowed
+  // to invalidate other valid candidates from the same response.
+  const candidates = [];
+  let malformed = 0;
+  let missingScores = 0;
+  let noneCount = 0;
+  for (const line of extracted) {
+    if (/^PSY_NONE$/i.test(line)) { noneCount++; continue; }
+    const match = /^PSY_[ \t]*EVENT\s*\|\s*([^|\n]+?)\s*\|\s*(STRESS|SANITY|CALM|RELAX|SELF_HEAL|TREATMENT)\s*\|\s*(1|2|5|10)\s*\|\s*P([1-9]\d*)\s*\|\s*(100|[1-9]\d?)\s*%?\s*$/i.exec(line);
+    if (match) {
+      candidates.push({
+        name: match[1].trim(), kind: match[2].toUpperCase(),
+        loss: Number(match[3]), paragraph: Number(match[4]),
+        score: Number(match[5])
+      });
+    } else {
+      malformed++;
+      if (/^PSY_[ \t]*EVENT\s*\|/i.test(line) && line.split("|").length === 5) {
+        missingScores++;
+        psyLog("PSY CANDIDATE SKIPPED: Missing qualification score | " + line.slice(0, 160));
+      } else {
+        psyLog("PSY CANDIDATE SKIPPED: Malformed record | " + line.slice(0, 160));
+      }
+    }
+  }
+  if (noneCount && candidates.length) {
+    psyLog("PSY WARNING: Mixed PSY_NONE with event candidates; ignoring PSY_NONE");
+  }
+  if (consumedMarkers) {
+    psyLog("PSY: Leading scored assessment found (" + consumedMarkers + " marker(s))");
+    psyLog("PSY: Parsed candidates " + candidates.length +
+        " | Malformed " + malformed + " | Missing scores " + missingScores);
+  } else {
+    psyLog("PSY: Assessment block NOT found — story preserved; events skipped");
+  }
+
+  // -------- Narrative cleanup (conservative and non-destructive) --------
+  const beforeCleanup = story.length;
+  const oldFooter = /\[\[\s*PSY_ASSESSMENT\s*\]\]/i.exec(story);
+  if (oldFooter) {
+    story = story.slice(0, oldFooter.index);
+    psyLog("PSY CLEANUP: Old story-first footer removed");
+  }
+
+  let leaks = 0;
+  story = story.replace(
+    /<?SYSTEM>?[ \t]*\n[ \t]*PSYCHOLOGICAL ASSESSMENT\s*[-—]\s*ONE SHORT BLOCK FIRST\.?[\s\S]{0,5000}?\(\s*PSY_NONE\s*\)[ \t]*/gim,
+    () => { leaks++; return "\n\n"; }
+  );
+  // Also strip a fully echoed copy of this new Context Modifier's prompt.
+  story = story.replace(
+    /<?SYSTEM>?[ \t]*\n[ \t]*PRIVATE PSYCHOLOGICAL JUDGMENT[^\n]*\n[\s\S]{0,14000}?<\/SYSTEM>/gim,
+    () => { leaks++; return "\n\n"; }
+  );
+  if (leaks) psyLog("PSY CLEANUP: Leaked SYSTEM assessment instructions removed (" + leaks + ")");
+
+  // Occasionally the storyteller acknowledges the hidden assessment prompt
+  // in ordinary English rather than emitting a PSY_* tag. These are narrowly
+  // targeted meta-instruction sentences, NOT general scene-description filters.
+  // Their source may be glued directly to user prose without any separator.
+  let metaProse = 0;
+  const discardMetaProse = () => { metaProse++; return "\n\n"; };
+  story = story.replace(
+    /I understand (?:the|your) system(?:'|’)s logic for tracking psychological states\.[ \t\n]*(?:I(?:'|’)ll|I will) review the accepted events and provide a summary of the current status\.[ \t\n]*/gi,
+    discardMetaProse
+  );
+  // Also tolerate just one sentence escaping by itself.
+  story = story.replace(
+    /I understand (?:the|your) system(?:'|’)s logic for tracking psychological states\.[ \t]*/gi,
+    discardMetaProse
+  );
+  story = story.replace(
+    /(?:I(?:'|’)ll|I will) review the accepted events and provide a summary of the current status\.[ \t]*/gi,
+    discardMetaProse
+  );
+  if (metaProse) psyLog("PSY CLEANUP: AI meta-assessment prose removed (" + metaProse + ")");
+
+  // v8.6 — Strip ONLY recognizable hidden-analysis material. A leaked
+  // STRATEGIC THOUGHT block is a heading followed by its first paragraph,
+  // not an invitation to erase everything to the end of the generation.
+  // Also remove exact history-record formatting produced by this script's
+  // Context Modifier, using known character names to avoid deleting dialogue.
+  const escapeHistoryName = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const knownHistoryNames = Object.values(db.people || {})
+    .filter(p => p && typeof p.name === 'string' && p.name.trim())
+    .map(p => escapeHistoryName(p.name.trim()))
+    .sort((a, b) => b.length - a.length);
+  const historyLine = knownHistoryNames.length
+    ? new RegExp('^[ \\t]*(?:[-*][ \\t]+)?(?:' + knownHistoryNames.join('|') +
+      '):[ \\t]*(?:STRESS|SANITY|CALM|RELAX|SELF_HEAL|TREATMENT)[ \\t]*[—–-][ \\t]*' +
+      'P[1-9]\\d*[ \\t]*\\([ \\t]*(?:100|[1-9]?\\d)[ \\t]*/[ \\t]*100[ \\t]*\\)[ \\t]*:[^\\n]*$', 'i')
+    : null;
+  const thoughtHeading = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?STRATEGIC[ \t]+THOUGHT(?:\*\*)?[ \t]*:(?:\*\*)?[ \t]*(.*)$/i;
+  const leakLines = story.split('\n');
+  const safeLines = [];
+  let thoughtLeaks = 0;
+  let historyLeaks = 0;
+  for (let i = 0; i < leakLines.length; i++) {
+    const line = leakLines[i];
+    const thought = thoughtHeading.exec(line);
+    if (thought) {
+      thoughtLeaks++;
+      // Inline explanation is already on the heading line; remove that
+      // line only. For a standalone heading, remove the next paragraph,
+      // allowing blank lines between the heading and that paragraph.
+      if (!thought[1].trim()) {
+        let next = i + 1;
+        while (next < leakLines.length && !leakLines[next].trim()) next++;
+        let removed = 0;
+        while (next < leakLines.length && leakLines[next].trim() &&
+               removed + leakLines[next].length <= 1600) {
+          removed += leakLines[next].length + 1;
+          next++;
+        }
+        if (removed) i = next - 1;
+      }
+      continue;
+    }
+    if (historyLine && historyLine.test(line)) {
+      historyLeaks++;
+      continue;
+    }
+    // The history label by itself is also internal metadata. Keep this
+    // specific; do not remove other references to previous events.
+    if (/^[ \t]*RECENT ACCEPTED EVENTS(?:[ \t]*\([^\n)]*\))?[ \t]*:[ \t]*$/i.test(line)) {
+      historyLeaks++;
+      continue;
+    }
+    safeLines.push(line);
+  }
+  if (thoughtLeaks || historyLeaks) {
+    story = safeLines.join('\n').replace(/\n(?:[ \t]*\n){2,}/g, '\n\n');
+    if (thoughtLeaks) psyLog('PSY CLEANUP: STRATEGIC THOUGHT block removed (' + thoughtLeaks + ')');
+    if (historyLeaks) psyLog('PSY CLEANUP: Leaked event-history lines removed (' + historyLeaks + ')');
+  }
+
+  story = story.replace(/^[ \t]*\(?PSY_NAR{1,2}ATIVE\)?[ \t]*:?[ \t]*/gim, "");
+  story = story.replace(/^[ \t]*(?:The assessments yield|Assessment results|Psychological assessment):?[ \t]*$/gim, "");
+
+  // Remove misplaced machine-readable metadata from ANYWHERE in prose.
+  // In particular, the AI sometimes invents (PSY_OTHER|...) markers after
+  // a sentence rather than producing valid leading PSY_EVENT assessments.
+  // Treat unknown/inline markers as leaks, never as gameplay events.
+  // Balanced tags are surgically removed to preserve surrounding narration.
+  let embedded = 0;
+  const discardEmbedded = () => { embedded++; return ""; };
+  // A common AI typo is `(PSY_ EVENT|...)` (space after underscore).
+  // Such inline tags are NOT trusted event proposals; erase metadata only.
+  story = story.replace(/\(\s*PSY_[ \t]+[A-Z][A-Z0-9_]*(?:\s*\|[^)\r\n]*)?\s*\)/gi, discardEmbedded);
+  story = story.replace(/\[\s*PSY_[ \t]+[A-Z][A-Z0-9_]*(?:\s*\|[^\]\r\n]*)?\s*\]/gi, discardEmbedded);
+  story = story.replace(/\(\s*PSY_[A-Z][A-Z0-9_]*(?:\s*\|[^)\r\n]*)?\s*\)/gi, discardEmbedded);
+  story = story.replace(/\[\s*PSY_[A-Z][A-Z0-9_]*(?:\s*\|[^\]\r\n]*)?\s*\]/gi, discardEmbedded);
+  // Unwrapped but otherwise structured six-field markers can occur mid-line.
+  // Remove only the metadata span; retain the prose on either side.
+  story = story.replace(
+    /\bPSY_[ \t]*[A-Z][A-Z0-9_]*\s*\|\s*[^|\r\n]{1,100}\s*\|\s*(?:STRESS|SANITY|CALM|RELAX|SELF_HEAL|TREATMENT)\s*\|\s*(?:1|2|5|10)\s*\|\s*P[1-9]\d*\s*\|\s*(?:100|[1-9]\d?)\s*%?(?=[^A-Za-z0-9]|$)/gi,
+    discardEmbedded
+  );
+  // An unbalanced/unknown marker occupying its own line is still metadata.
+  // This fallback is deliberately line-anchored to avoid deleting story prose.
+  story = story.replace(/^[ \t]*\(?\s*PSY_[ \t]*[A-Z][A-Z0-9_]*\s*\|[^\r\n]*$/gim, discardEmbedded);
+  story = story.replace(/^[ \t]*PSY_NONE[ \t]*$/gim, "");
+  if (embedded) {
+    psyLog("PSY CLEANUP: Stray/unsupported assessment markers removed (" + embedded + ")");
+    story = story.replace(/[ \t]+\n/g, "\n").replace(/\n(?:[ \t]*\n){2,}/g, "\n\n");
+  }
+  story = story.replace(/^[ \t]*(?:EVIDENCE\s*:|\|\s*EVIDENCE\s*:)[^\n]*$/gim, "");
+  story = story.replace(/^[ \t]*\)+[ \t]*$/gm, "");
+  story = story.trim();
+  if (story.length !== beforeCleanup) {
+    psyLog("PSY CLEANUP: Removed " + (beforeCleanup - story.length) + " characters of assessment text");
+  }
+
+  const usable = story.length >= 40 && /[a-z]{3,}/i.test(story) &&
+    !/^\(?\s*PSY_(?:NONE|EVENT)/i.test(story);
+  if (!usable) {
+    psyLog("PSY WARNING: No usable narrative generated on turn " + db.turn);
+    psyLog("PSY: Assessment processing skipped");
+    psyLog("PSY FAILED GENERATION RAW OUTPUT:\n" + raw.slice(0, 1800));
+    assessment.sourceText = "";
+    assessment.sourceTurn = db.turn;
+    assessment.resultText = extracted.join("\n");
+    assessment.evidenceParagraphs = [];
+    assessment.evidenceSourceTurn = null;
+    assessment.phase = "requested";
+    assessment.attempts = 0;
+    // A failed generation cannot deliver any previously queued outburst.
+    // Retain the queue so the next successful narration can still use it.
+    psyLog("PSY: Previous valid narrative preserved (" + db.lastValidNarrative.length + " characters)");
+    return { text: "[The narrative generation was incomplete. Continue to resume the story.]" };
+  }
+
+  // -------- Safe candidate evaluation --------
+  if (consumedMarkers && activatingLive) {
+    psyLog('MINDRIFT LIVE BASELINE: ignored assessments of pre-activation narration; story preserved');
+  }
+  if (consumedMarkers && !activatingLive) {
+    psyLog("=== PSY QUALIFICATION ASSESSMENT ===");
+    psyLog("Assessment text:\n" + extracted.join("\n"));
+    let accepted = 0, blocked = 0, rejected = malformed, below = 0;
+    const source = String(assessment.sourceText || "");
+    const paragraphs = Array.isArray(assessment.evidenceParagraphs)
+      ? assessment.evidenceParagraphs : [];
+    const eligible = [];
+
+    // Check each candidate before ranking duplicates by character.
+    for (const c of candidates) {
+      const character = resolveAssessmentCharacter(c.name);
+      if (!character) {
+        rejected++;
+        psyLog("PSY VALIDATION REJECTED: Unknown character " + c.name);
+        audit(c, "rejected", "unknown character");
+        continue;
+      }
+      const evidence = paragraphs[c.paragraph - 1];
+      if (!evidence || evidence.length < 20 || !source.includes(evidence) ||
+          assessment.evidenceSourceTurn !== assessment.sourceTurn) {
+        rejected++;
+        psyLog("PSY VALIDATION REJECTED: " + character.name +
+          " | " + c.kind + " | Evidence paragraph absent or stale");
+        audit(c, "rejected", "missing or stale evidence");
+        continue;
+      }
+      if ((c.kind === 'SELF_HEAL' || c.kind === 'TREATMENT') &&
+          !sanityRecoveryEvidenceNames(character, evidence)) {
+        rejected++;
+        psyLog('PSY SANITY RECOVERY REJECTED: ' + character.name +
+          ' | ' + c.kind + ' | P' + c.paragraph +
+          ' does not name the recovering character (offscreen/unanchored evidence)');
+        audit(c, 'rejected', 'sanity recovery recipient absent from cited evidence', evidence);
+        continue;
+      }
+      if (c.kind === 'SELF_HEAL' &&
+          (!Array.isArray(character.selfHealingTriggers) ||
+           !character.selfHealingTriggers.length)) {
+        rejected++;
+        psyLog('PSY RECOVERY REJECTED: ' + character.name +
+          ' has no self-healing activity configured');
+        audit(c, 'rejected', 'unconfigured self-healing activities', evidence);
+        continue;
+      }
+      if (c.kind === "SANITY" && !fearFor(character)) {
+        rejected++;
+        psyLog("PSY FEAR REJECTED: " + character.name +
+          " has no configured personal fear/flaw (weakness/fear)");
+        audit(c, "rejected", "unconfigured personal fear/flaw", evidence);
+        continue;
+      }
+      // Sanity reductions are fixed at 10; tolerate the AI writing
+      // another allowed loss amount instead of rejecting valid intent.
+      if (c.kind === "SANITY" && c.loss !== 10) {
+        psyLog("PSY FEAR NORMALIZED: " + character.name + " | " +
+          c.loss + " -> 10 fixed Sanity loss");
+        c.loss = 10;
+      }
+      const recovery = c.kind === 'CALM' || c.kind === 'RELAX' ||
+        c.kind === 'SELF_HEAL' || c.kind === 'TREATMENT';
+      if (recovery) {
+        const required = c.kind === 'CALM' ? 1 : 10;
+        if (c.loss !== required) {
+          psyLog('PSY RECOVERY AMOUNT NORMALIZED: ' + character.name +
+            ' | ' + c.kind + ' | ' + c.loss + ' -> ' + required);
+          c.loss = required;
+        }
+      }
+      const threshold = c.kind === 'SANITY' ? SANITY_THRESHOLD :
+        c.kind === 'STRESS' ? STRESS_THRESHOLD :
+        c.kind === 'CALM' ? CALM_THRESHOLD :
+        c.kind === 'RELAX' ? RELAX_THRESHOLD : SANITY_RECOVERY_THRESHOLD;
+      psyLog("PSY QUALIFICATION: " + character.name + " | " + c.kind +
+        " | " + (recovery ? '+' : '-') + c.loss + " | P" + c.paragraph + " | Score " + c.score +
+        " | Threshold " + threshold + " | " + evidence.slice(0, 120));
+      if (c.score < threshold) {
+        below++;
+        psyLog("PSY BELOW THRESHOLD: " + character.name + " | " + c.kind +
+          " | " + c.score + " < " + threshold);
+        audit(c, "below_threshold", "score below threshold", evidence);
+        continue;
+      }
+      eligible.push({ candidate: c, character, evidence });
+    }
+
+    // Process qualifying harm FIRST. Reject false "calm" recovery not just
+    // for the injured character, but also for participants in the same
+    // distressing narration (e.g. Juno assisting Talia after an injury).
+    // This is based on VALID, ABOVE-THRESHOLD assessments, not actual
+    // deductions. A harm cooldown must never turn an acute scene into rest.
+    // STRESS >= 80 and personal SANITY >= 90 both constitute an acute scene.
+    // A below-threshold or malformed harm candidate does not trigger a veto.
+    // Use group keys so CALM/RELAX and SELF_HEAL/TREATMENT cannot stack.
+    const harmKinds = new Set(['STRESS', 'SANITY']);
+    const blockingSanity = new Set(eligible.filter(e => e.candidate.kind === 'SANITY')
+      .map(e => e.character.name.toLowerCase()));
+    const sceneHarm = eligible.filter(e => harmKinds.has(e.candidate.kind))
+      .sort((a, b) => b.candidate.score - a.candidate.score)[0] || null;
+    const rank = e => e.candidate.kind === 'RELAX' ? 2 :
+      e.candidate.kind === 'SELF_HEAL' || e.candidate.kind === 'TREATMENT' ? 1 : 0;
+    eligible.sort((a, b) =>
+      (harmKinds.has(b.candidate.kind) ? 1 : 0) -
+      (harmKinds.has(a.candidate.kind) ? 1 : 0) ||
+      rank(b) - rank(a) || b.candidate.score - a.candidate.score ||
+      a.candidate.loss - b.candidate.loss);
+    const selected = {};
+    for (const e of eligible) {
+      const c = e.candidate;
+      const nameKey = e.character.name.toLowerCase();
+      const group = c.kind === 'CALM' || c.kind === 'RELAX'
+        ? 'STRESS_RECOVERY' :
+        c.kind === 'SELF_HEAL' || c.kind === 'TREATMENT'
+          ? 'SANITY_RECOVERY' : c.kind;
+      const key = nameKey + '|' + group;
+      if (selected[key]) {
+        psyLog('PSY DUPLICATE SKIPPED: ' + e.character.name + ' | ' + c.kind +
+          ' | score ' + c.score);
+        audit(c, 'duplicate', 'one event per character per category', e.evidence);
+        continue;
+      }
+      selected[key] = true;
+      if (Object.keys(selected).length > MAX_CANDIDATES) {
+        audit(c, 'excess', 'maximum five events', e.evidence);
+        continue;
+      }
+      if (group === 'STRESS_RECOVERY' && sceneHarm) {
+        const harm = sceneHarm.candidate;
+        const reason = 'qualifying ' + harm.kind + ' for ' +
+          sceneHarm.character.name + ' (score ' + harm.score + ')';
+        psyLog('PSY RECOVERY BLOCKED: ' + e.character.name + ' | scene-wide ' +
+          reason + '; CALM/RELAX withheld even during harm cooldown');
+        audit(c, 'scene_conflict', reason, e.evidence);
+        blocked++;
+        continue;
+      }
+      if (group === 'SANITY_RECOVERY' && blockingSanity.has(nameKey)) {
+        psyLog('PSY RECOVERY BLOCKED: ' + e.character.name +
+          ' | direct Sanity-loss candidate in this same scene');
+        audit(c, 'conflict', 'qualifying direct sanity loss', e.evidence);
+        blocked++;
+        continue;
+      }
+      db.cooldowns[nameKey] ||= { STRESS: null, SANITY: null };
+      const stamps = db.cooldowns[nameKey];
+      if (group === 'STRESS_RECOVERY' || group === 'SANITY_RECOVERY') {
+        const cause = 'P' + c.paragraph + ' (' + c.score + '/100): ' +
+          e.evidence.slice(0, 160);
+        const applied = applyRecovery(e.character, c.kind, cause);
+        if (applied) {
+          accepted++;
+          db.recentEvents.push({name:e.character.name,kind:c.kind,
+            loss:-c.loss,cause,turn:db.turn,qualification:c.score});
+          psyLog('PSY RECOVERY ACCEPTED (' + (TEST_MODE ? 'TEST MODE' : 'LIVE') +
+            '): ' + e.character.name + ' | ' + c.kind +
+            ' | Score ' + c.score + ' | ' + cause);
+          audit(c, TEST_MODE ? 'recovery_test' : 'recovery_live',
+            'qualified restorative experience', e.evidence);
+        } else {
+          blocked++;
+          audit(c, 'recovery_skipped', 'cooldown or already full', e.evidence);
+        }
+        continue;
+      }
+      const last = stamps[c.kind];
+      const elapsed = last == null ? Infinity : db.turn - last;
+      const cooldownTurns = c.kind === 'SANITY'
+        ? SANITY_COOLDOWN_TURNS : STRESS_COOLDOWN_TURNS;
+      const remaining = Math.max(0, cooldownTurns - elapsed);
+      psyLog('PSY COOLDOWN CHECK: ' + e.character.name + ' | ' + c.kind +
+        ' | Current turn ' + db.turn + ' | Last event turn ' +
+        (last == null ? 'NONE' : last) + ' | Remaining ' + remaining);
+      if (elapsed < cooldownTurns) {
+        blocked++;
+        psyLog('PSY COOLDOWN BLOCKED: ' + e.character.name + ' | ' + c.kind +
+          ' | ' + remaining + ' turns remaining');
+        audit(c, 'cooldown', remaining + ' turns remaining', e.evidence);
+        continue;
+      }
+      stamps[c.kind] = db.turn;
+      const cause = 'P' + c.paragraph + ' (' + c.score + '/100): ' +
+        e.evidence.slice(0, 160);
+      db.recentEvents.push({
+        name: e.character.name, kind: c.kind, loss: c.loss,
+        cause, turn: db.turn, qualification: c.score
+      });
+      accepted++;
+      psyLog('PSY EVENT ACCEPTED (' + (TEST_MODE ? 'TEST MODE' : 'LIVE') +
+        '): ' + e.character.name + ' | ' + c.kind + ' | -' + c.loss +
+        ' | Score ' + c.score + ' | ' + cause);
+      psyLog('PSY COOLDOWN STARTED: ' + e.character.name + ' | ' + c.kind +
+        ' | Turn ' + db.turn + ' | ' + cooldownTurns + ' turns');
+      applyLinkedEvent(e.character, c.kind, c.loss, cause);
+      audit(c, TEST_MODE ? 'accepted_test' : 'accepted_live',
+        'score above threshold, cooldown clear', e.evidence);
+    }
+    if (db.recentEvents.length > 20) db.recentEvents = db.recentEvents.slice(-20);
+    psyLog("PSY: Accepted events " + accepted);
+    psyLog("PSY: Validation rejected events " + rejected);
+    psyLog("PSY: Below threshold events " + below);
+    psyLog("PSY: Cooldown blocked events " + blocked);
+    psyLog("PSY: Stored recent events " + db.recentEvents.length);
+    psyLog("=== END QUALIFICATION ASSESSMENT ===");
+  }
+
+  db.lastValidNarrative = story;
+  assessment.sourceText = story;
+  assessment.sourceTurn = db.turn;
+  assessment.resultText = extracted.join("\n");
+  assessment.evidenceParagraphs = [];
+  assessment.evidenceSourceTurn = null;
+  assessment.phase = "requested";
+  assessment.attempts = 0;
+  if (priorPendingCount) db.pending.splice(0, priorPendingCount);
+  if (db.pending.length) psyLog('PSY PENDING EFFECTS: ' + db.pending.length +
+    ' awaiting the next context injection');
+  psyLog("PSY: Visible narrative length " + story.length);
+  return { text: story };
+};
+modifier(text);

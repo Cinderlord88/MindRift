@@ -1,0 +1,10 @@
+// MINDRIFT v1.0 — INPUT MODIFIER
+// Prepare character records before each player action.
+const modifier = (text) => {
+  PSY.ensure();
+  const database = PSY.init();
+  database.turn += 1;
+  database.seen = {}; // Only deduplicate events within this turn.
+  return { text };
+};
+modifier(text);

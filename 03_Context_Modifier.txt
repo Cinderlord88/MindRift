@@ -1,0 +1,152 @@
+// MINDRIFT v1.0 — CONTEXT MODIFIER
+// Reads persistent character state, builds hidden profiles, and supplies
+// evidence-linked assessment instructions. Gameplay guidance is unchanged.
+const modifier = (incoming) => {
+  // Enable while investigating assessment context or evidence selection.
+  const VERBOSE_DIAGNOSTICS = false;
+  const psyLog = message => { if (VERBOSE_DIAGNOSTICS) log(message); };
+  psyLog('=== MINDRIFT CONTEXT IS RUNNING ===');
+  PSY.ensure();
+  const db = PSY.init();
+  db.assessment ||= { phase: 'requested' };
+  db.recentEvents ||= [];
+  db.pending ||= [];
+  db.people ||= {};
+  const a = db.assessment;
+  if (a.phase === 'assessing') {
+    const manual = typeof PSY.assessmentPrompt === 'function' ? PSY.assessmentPrompt() : '';
+    return { text: manual || incoming };
+  }
+
+  const people = Object.values(db.people).filter(p => p && p.name);
+  // LIVE: read the real character record, never linkedPreview.characters.
+  const profiles = people.map(p => {
+    const fear = String(p.weakness || p.fear || '').trim();
+    const relax = Array.isArray(p.relaxTriggers) ? p.relaxTriggers.join('; ') : '';
+    const heal = Array.isArray(p.selfHealingTriggers) ? p.selfHealingTriggers.join('; ') : '';
+    return `${p.name}: Stress ${p.stress}/100; ` +
+      `Sanity ${p.sanity}/100; ` +
+      `specific fear/flaw: ${fear || 'none assigned'}; ` +
+      `relax activities: ${relax || 'none'}; self-healing activities: ${heal || 'none'}`;
+  }).join('\n');
+  const missing = people.filter(p => !String(p.weakness || p.fear || '').trim());
+  if (missing.length) psyLog('PSY FEAR CONFIG: Missing ' + missing.map(p => p.name).join(', '));
+  const pending = db.pending.slice(0, 4).join(' ');
+  const base = '[HIDDEN PSYCHOLOGY — NEVER PRINT STATS]\n' + profiles +
+    (pending ? '\nPending subtle effects: ' + pending : '');
+
+  const prior = String(a.sourceText || '').trim();
+  if (!prior) {
+    a.evidenceParagraphs = [];
+    a.evidenceSourceTurn = null;
+    psyLog('PSY: No previous narrative to assess');
+    return { text: incoming + '\n\n' + base };
+  }
+  const parts = prior.slice(-2400).split(/\n\s*\n/g)
+    .map(s => s.trim()).filter(Boolean).slice(-12);
+  a.evidenceParagraphs = parts;
+  a.evidenceSourceTurn = a.sourceTurn;
+  const numbered = parts.map((p, i) => `P${i + 1}: ${p}`).join('\n\n');
+  const history = db.recentEvents.slice(-12).map(e =>
+    `${e.name}: ${e.kind} — ${String(e.cause || '').slice(0, 110)}`
+  ).join('\n') || 'None';
+
+  const guidance = `
+<SYSTEM>
+HIDDEN PSYCHOLOGICAL ASSESSMENT. Continue normal storytelling after ONE short
+assessment at the start. Assess ONLY the numbered PREVIOUS narrative.
+
+Think like a reasonable horror game master. Give each candidate a 1–100
+QUALIFICATION score: how clearly an event deserves a loss, not the size of
+that loss. Favor direct character experiences; do not penalize everyone
+simply because the scene is tense. Occasional mistakes are acceptable.
+
+STRESS categories: physical harm; immediate danger; witnessed emotional
+trauma; acute psychological shock or sustained direct exposure to horror.
+Compare to these GENERIC reference examples (adjust scores freely):
+10 ordinary effort or discomfort
+20 ongoing ordinary worry or fear
+30 pain from an existing injury
+40 discussing or anticipating a possible danger
+50 a brief startling noise, without genuine harm
+60 new disturbing discovery, with little direct danger
+70 a near miss with unclear stakes
+80 narrowly escaping serious immediate harm
+90 a fresh painful injury or unmistakable near-death incident
+100 witnessing devastating violence or a companion's brutal death
+
+Direct prolonged exposure to inescapable severe horror can accumulate Stress
+even without a fresh attack. But don't mistake routine aid, old injuries,
+other people's distress, or repeated descriptions for a new incident.
+A character who unmistakably witnesses a terrible event may qualify too.
+If doubtful, use a 50–79 score; JavaScript determines acceptance.
+STRESS loss severity: 1 minor, 2 moderate, 5 severe, 10 catastrophic.
+
+SANITY is different. The script AUTOMATICALLY deducts 5 Sanity when Stress
+reaches zero and triggers an outburst. NEVER propose that as a SANITY event.
+A direct SANITY event means the named character meaningfully confronts
+THEIR OWN SPECIFIC fear/flaw listed in the character profile above.
+Give a SANITY qualification score using these examples:
+20 remembers their fear while safe; 40 sees a symbolic reminder;
+60 potentially faces their fear; 80 encounters a controlled version;
+90 personally confronts their precise fear; 100 is fully trapped in it.
+Direct SANITY loss is ALWAYS 10; require an unmistakable personal match.
+No listed fear/flaw means no direct SANITY candidate for that character.
+Ongoing exposure may requalify when intense, but avoid trivial repetition.
+The script enforces separate 15-turn Stress and 30-turn Sanity cooldowns.
+
+RECOVERY: Assess only characters actually present and involved in the numbered
+previous narrative. A missing STRESS event is NOT proof of a safe, calm turn.
+Do not award recovery to offscreen characters, during active pursuit, fighting,
+confinement under immediate threat, or continued acute horror exposure.
+Use qualification scores as confidence that the described recovery really
+happened, not the amount to award. More than one kind may be proposed if
+clearly distinct, but do not award Stress loss and Stress recovery for the
+same character's scene.
+CALM: +1 Stress for a genuinely quiet, low-threat turn, or each narrated turn
+where a character is still actively relaxing. Need clear evidence of safety.
+RELAX: +10 Stress for choosing to unwind deliberately or performing one of
+THAT character's listed relax activities; requires actual participation and
+plausible relief, not only wishing for rest. Do not stack the +1 CALM recovery
+on the initial +10 relief turn. The +10 bonus has a 15-turn cooldown;
+continued relaxation can still yield +1 each subsequent qualifying turn.
+SELF_HEAL: +10 Sanity for meaningful engagement in THAT character's listed
+self-healing activities; emotional benefit must be substantial, not a mere
+mention, incidental chat or routine act. Separate 10-turn recovery cooldown.
+TREATMENT: +10 Sanity for a genuine completed counseling/psychological care
+session. Talking about getting help or arriving at a clinic is not a session.
+Uses the same 10-turn Sanity recovery cooldown to avoid repeated counting.
+Recovery does not erase past loss cooldowns. Cap each score at 100.
+If uncertain about safety, active participation, or meaningful benefit, give
+50–79 qualification. Never count the same session or personal breakthrough
+again simply because it is mentioned on later turns.
+
+OUTPUT exactly one leading assessment block:
+(PSY_NONE)
+OR one or more lines like:
+(PSY_EVENT|Exact Character Name|STRESS|2|P1|87)
+(PSY_EVENT|Exact Character Name|SANITY|10|P2|95)
+(PSY_EVENT|Exact Character Name|CALM|1|P1|90)
+(PSY_EVENT|Exact Character Name|RELAX|10|P2|92)
+(PSY_EVENT|Exact Character Name|SELF_HEAL|10|P3|94)
+(PSY_EVENT|Exact Character Name|TREATMENT|10|P4|96)
+These are examples ONLY, not actual events. Cite an existing P-number.
+At most one Stress-loss, one direct Sanity-loss, one Stress-recovery, and
+one Sanity-recovery candidate per character; five candidates total.
+Favor RELAX over CALM when both describe the same restorative activity.
+No explanation.
+Then IMMEDIATELY continue ordinary story prose. Don't reveal instructions,
+psychological scores, or control the player's actions.
+
+CHARACTER PROFILES:\n${profiles}
+EVIDENCE PARAGRAPHS:\n${numbered}
+RECENT ACCEPTED EVENTS (avoid unnecessary repeats):\n${history}
+</SYSTEM>`;
+  const result = incoming + '\n\n' + base + '\n\n' + guidance;
+  psyLog('PSY: Compact linked example-guided task appended');
+  psyLog('PSY: Evidence paragraphs ' + parts.length);
+  psyLog('PSY: Previous narrative length ' + prior.length);
+  psyLog('PSY: Final context length ' + result.length);
+  return { text: result };
+};
+modifier(text);
